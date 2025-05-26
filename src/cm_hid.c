@@ -487,7 +487,7 @@ hid_close_device(HidDevice* dev)
 }
 
 static HidDevice*
-hid_get_device(HidDeviceInfo *hid_info)
+hid_get_device(HidDeviceInfo *hid_info, DWORD r_timeout, DWORD w_timeout)
 {
 	HANDLE                h_dev   = INVALID_HANDLE_VALUE;
 	HIDP_CAPS             caps    = {0};
@@ -525,8 +525,8 @@ hid_get_device(HidDeviceInfo *hid_info)
   dev->ol.hEvent        = CreateEvent(NULL, FALSE, FALSE, NULL);
   dev->read_ol.hEvent   = CreateEvent(NULL, FALSE, FALSE, NULL);
   dev->write_ol.hEvent  = CreateEvent(NULL, FALSE, FALSE, NULL);
-  dev->write_timeout_ms = 1000;
-  dev->read_timeout_ms  = 1000;
+  dev->write_timeout_ms = w_timeout;
+  dev->read_timeout_ms  = r_timeout;
 
   dev->device_info  = hid_info;
   dev->input.size   = caps.InputReportByteLength;
@@ -759,10 +759,11 @@ hid_read(HidDevice* hid_dev, HidReport data)
       report_error("ReadFile");
       return -1;
     }
-    if (WaitForSingleObject(hid_dev->read_ol.hEvent, hid_dev->read_timeout_ms) != WAIT_OBJECT_0)
+    switch (WaitForSingleObject(hid_dev->read_ol.hEvent, hid_dev->read_timeout_ms))
     {
-      report_error("WaitForSingleObject");
-      return -1;
+      case WAIT_OBJECT_0: break;
+      case WAIT_TIMEOUT: return -2;
+      default: report_error("WaitForSingleObject"); return -1;
     }
     if (!GetOverlappedResult(hid_dev->h_dev, &hid_dev->read_ol, &read, FALSE))
     {
@@ -798,11 +799,12 @@ hid_write(HidDevice* hid_dev, HidReport data)
       report_error("WriteFile");
       return -1;
     }
-		if (WaitForSingleObject(hid_dev->write_ol.hEvent, hid_dev->write_timeout_ms) != WAIT_OBJECT_0)
+    switch (WaitForSingleObject(hid_dev->write_ol.hEvent, hid_dev->write_timeout_ms))
     {
-			report_error("WaitForSingleObject");
-			return -1;
-		}
+      case WAIT_OBJECT_0: break;
+      case WAIT_TIMEOUT: return -2;
+      default: report_error("WaitForSingleObject"); return -1;
+    }
 		if (!GetOverlappedResult(hid_dev->h_dev, &hid_dev->write_ol, &written, FALSE))
     {
 			report_error("GetOverlappedResult");

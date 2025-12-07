@@ -2,7 +2,6 @@
 #define CM_HID_C
 
 #pragma warning(push, 0)
-#include <windows.h>
 #include <setupapi.h>
 #include <Cfgmgr32.h>
 #define INITGUID
@@ -73,7 +72,7 @@ typedef struct HidReport
   u32 size;
 } HidReport, Hid_Report;
 
-typedef struct HidDevice {
+typedef struct Hid_Device {
   HANDLE        h_dev;
   bool          blocking;
 
@@ -88,7 +87,7 @@ typedef struct HidDevice {
   OVERLAPPED    write_ol;
   u32           write_timeout_ms;
   Hid_Device_Info *device_info;
-} HidDevice, Hid_Device;
+} Hid_Device, Hid_Device;
 
 typedef struct HidDetectBusType {
 	u32           flags;
@@ -462,7 +461,7 @@ hid_get_device(Hid_Device_Info *hid_info, u32 r_timeout, u32 w_timeout)
 	if ( !HidD_GetPreparsedData(h_dev, &pp_data) ) { console_debug("HidD_GetPreparsedData"); goto _end; }
 	if ( HidP_GetCaps(pp_data, &caps) != HIDP_STATUS_SUCCESS ) { console_debug("HidP_GetCaps"); goto _cleanup; }
 
-  heap_alloc_dz(sizeof(HidDevice), dev);
+  heap_alloc_dz(sizeof(Hid_Device), dev);
 	dev->h_dev = h_dev;
 	h_dev      = NULL;
 
@@ -632,7 +631,7 @@ cleanup:
 #define HID_SEND_OUTPUT   0x11
 
 static i64
-hid_send_report(HidDevice* hid_dev, HidReport data, i32 type)
+hid_send_report(Hid_Device* hid_dev, HidReport data, i32 type)
 {
   Hid_Report payload, dev_payload;
 

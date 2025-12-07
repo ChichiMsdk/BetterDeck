@@ -4,11 +4,7 @@ cd /D "%~dp0"
 setlocal
 if exist C:\vc_env\msvc\setup.bat @call "C:\vc_env\msvc\setup.bat"
 
-where /q cl || (
-  echo ERROR: "cl" not found - please run from MSVC x64 native tools command prompt.
-  rem exit /b 1
-)
-
+where /q cl || ( echo ERROR: "cl" not found - please run from MSVC x64 native tools command prompt.)
 where /q clang || (
   echo ERROR: "clang" not found - please install llvm-toolchain to use CLANG.
   exit /b 1
@@ -22,7 +18,6 @@ if "%debug%"=="1"   set release=0 && echo [debug mode]
 if "%release%"=="1" set debug=0 && echo [release mode]
 if "%msvc%"=="1"    set clang=0 && echo [msvc compile]
 if "%clang%"=="1"   set msvc=0 && echo [clang compile]
-rem if not %crt%=1
 
 :: -- CRT_NO_CRT ----------------------------------------------------------------------
 set crt=0

@@ -11,10 +11,6 @@
 #include "cm_hid.c"
 #include "sdeck_icons.h"
 
-#include <cfgmgr32.h>
-#include <hidsdi.h>
-#include <setupapi.h>
-
 /* NOTE: Taken from elgato's repo */
 #define VID_ELGATO              0x0fd9
 #define PID_SDECK_ORIGINAL      0x0060
@@ -39,19 +35,15 @@ global u16 g_elgato_pids[] = {
 /* NOTE: This is currently based off StreamDeckXL's values */
 typedef struct StreamDeck
 {
-  u8         rows;                 // 4
-  u8         cols;                 // 8
-  u8         total;                // rows * cols
-  u16        pxl_w;                // 96
-  u16        pxl_h;                // 96
-  u8         img_rpt_header_len;   // 8
-  u32        img_rpt_payload_len;  // img_rpt - img_rpt_header
-  u32        img_rpt_len;          // 1024
-  char*      img_format;           // "JPEG"
-  u8         key_rotation;         // 0
-  u8         *blank_key;
-  u32        key_states;           // 32 packed keys
-  HidDevice* hid;
+  u8          rows, cols, total;                 /* r4 | c8 | r * c                 */
+  u16         pxl_w, pxl_h;                      /* w96 | h96                       */
+  u8          img_rpt_header_len;                /* 8                               */
+  u32         img_rpt_payload_len, img_rpt_len;  /* img_rpt - img_rpt_header | 1024 */
+  char*       img_format;                        /* "JPEG"                          */
+  u8          key_rotation;                      /* 0                               */
+  u8          *blank_key;
+  u32         key_states;                        /* 32 packed keys                  */
+  Hid_Device* hid;
 } StreamDeck, Stream_Deck;
 #pragma warning(default : 4820)
 
@@ -77,8 +69,8 @@ sdk_get_hid_device(void)
   return deck;
 }
 
-static i64
-sdk_get_report(StreamDeck* sdk)
+static inline i64
+sdk_get_report(Stream_Deck* sdk)
 {
   return hid_get_report(sdk->hid->h_dev, sdk->hid->feature, IOCTL_HID_GET_FEATURE);
 }
@@ -196,8 +188,8 @@ sdk_reset_key_stream(Stream_Deck* sdk)
   i64         written;
   Hid_Report  report;
 
+  memset(buffer,  0, SDK_IMAGE_SIZE);
   memset(&report, 0, sizeof(Hid_Report));
-  memset(buffer, 0, SDK_IMAGE_SIZE);
   report.size   = SDK_IMAGE_SIZE;
   report.buf    = buffer;
   report.buf[0] = 0x02;
@@ -211,7 +203,7 @@ sdk_reset(Stream_Deck *sdk)
   u8          buffer[2000];
   Hid_Report  report;
 
-  memset(buffer, 0, 2000);
+  memset(buffer,  0, 2000);
   memset(&report, 0, sizeof(Hid_Report));
   buffer[0]   = 0x03;
   buffer[1]   = 0x02;
@@ -229,10 +221,7 @@ print_pressed(Stream_Deck *sdk)
   key_states = sdk->key_states;
   for (i = 0; i < 32; i++)
   {
-    if ((key_states >> i) & 1)
-    {
-      printf("Key %d is pressed\n", i);
-    }
+    if ((key_states >> i) & 1) printf("Key %d is pressed\n", i);
   }
 }
 /*

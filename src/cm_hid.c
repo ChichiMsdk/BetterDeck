@@ -65,95 +65,78 @@ typedef struct HidDeviceInfo {
   i32                  interface_number;     // Set to -1 in if not USB HID device.
   e_HidBusType         type;
   struct HidDeviceInfo *next;
-} HidDeviceInfo;
+} HidDeviceInfo, Hid_Device_Info;
 
 typedef struct HidReport
 {
   u8  *buf;
   u32 size;
-} HidReport;
+} HidReport, Hid_Report;
 
 typedef struct HidDevice {
   HANDLE        h_dev;
-  BOOL          blocking;
+  bool          blocking;
 
   HidReport     output;
   HidReport     input;
   HidReport     feature;
 
-  BOOL          read_pending;
+  bool          read_pending;
   OVERLAPPED    read_ol;
-  DWORD         read_timeout_ms;
+  u32           read_timeout_ms;
   OVERLAPPED    ol;
   OVERLAPPED    write_ol;
-  DWORD         write_timeout_ms;
-  HidDeviceInfo *device_info;
-} HidDevice;
+  u32           write_timeout_ms;
+  Hid_Device_Info *device_info;
+} HidDevice, Hid_Device;
 
 typedef struct HidDetectBusType {
 	u32           flags;
 	DEVINST       dev_node;
 	e_HidBusType  type;
-} HidDetectBusType;
+} HidDetectBusType, Hid_Detect_Bus_Type;
 
 #pragma warning(default : 4820)
 
 static CONFIGRET
-hid_interface_list_get_size(DWORD *len, GUID *iguid)
+hid_interface_list_get_size(u32 *len, GUID *iguid)
 {
-  CONFIGRET cr = CM_Get_Device_Interface_List_Size(
-      len,
-      iguid,
-      NULL,
-      CM_GET_DEVICE_INTERFACE_LIST_PRESENT);
-  if (cr != CR_SUCCESS && cr != CR_BUFFER_SMALL)
-    report_error("CM_Get_Device_Interface_List");
+  CONFIGRET cr;
+
+  cr = CM_Get_Device_Interface_List_Size(len, iguid, NULL, CM_GET_DEVICE_INTERFACE_LIST_PRESENT);
+  if (cr != CR_SUCCESS && cr != CR_BUFFER_SMALL) { report_error("CM_Get_Device_Interface_List"); }
   return cr;
 }
 
 static CONFIGRET
-idev_get_list(GUID *iguid, void* buffer, DWORD len)
+idev_get_list(GUID *iguid, void* buffer, u32 len)
 {
-  CONFIGRET cr = CM_Get_Device_Interface_List(
-      iguid,
-      NULL,
-      buffer,
-      len,
-      CM_GET_DEVICE_INTERFACE_LIST_PRESENT);
+  CONFIGRET cr;
 
-  if (cr != CR_SUCCESS && cr != CR_BUFFER_SMALL)
-    report_error("CM_Get_Device_Interface_List");
+  cr = CM_Get_Device_Interface_List(iguid, NULL, buffer, len, CM_GET_DEVICE_INTERFACE_LIST_PRESENT);
+  if (cr != CR_SUCCESS && cr != CR_BUFFER_SMALL) { report_error("CM_Get_Device_Interface_List"); }
   return cr;
 }
 
 static HANDLE
-hid_open_ro(char* path)
+hid_open_ro(char *path)
 {
-  HANDLE h_dev  = NULL;
-  h_dev = CreateFile(
-      path,
-      0,
-      FILE_SHARE_READ | FILE_SHARE_WRITE,
-      NULL,
-      OPEN_EXISTING,
-      FILE_FLAG_OVERLAPPED,
-      NULL);
+  HANDLE h_dev;
+
+  h_dev = CreateFile(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
   /* if (!h_dev) report_error("CreateFile", path); */
   return h_dev;
 }
 
 static HANDLE
-hid_open_rw(char* path)
+hid_open_rw(char *path)
 {
-  HANDLE h_dev  = NULL;
-  h_dev = CreateFile(
-      path,
-      GENERIC_WRITE | GENERIC_READ,
-      FILE_SHARE_READ | FILE_SHARE_WRITE,
-      NULL,
-      OPEN_EXISTING,
-      FILE_FLAG_OVERLAPPED,
-      NULL);
+  u32    generic, fshare;
+  HANDLE h_dev;
+
+  fshare  = FILE_SHARE_READ | FILE_SHARE_WRITE;
+  generic = GENERIC_WRITE | GENERIC_READ;
+  h_dev   = CreateFile(path, generic, fshare, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
   /* if (!h_dev) report_error("CreateFile", path); */
   return h_dev;
 }
@@ -161,87 +144,78 @@ hid_open_rw(char* path)
 static void*
 hid_interface_get_property(char *path, DEVPROPKEY *key, DEVPROPTYPE expected_type)
 {
-	ULONG       len   = 0;
-	PBYTE       value = NULL;
+	u8          *value;
+	u32         len ;
+  wchar_t     *wpath;
 	CONFIGRET   cr;
 	DEVPROPTYPE property_type;
 
-  wchar_t *wpath = chars_to_wchars(path);
-	cr = CM_Get_Device_Interface_PropertyW(wpath, key, &property_type, NULL, &len, 0);
+  value = NULL;
+  wpath = chars_to_wchars(path);
+	cr    = CM_Get_Device_Interface_PropertyW(wpath, key, &property_type, NULL, &len, 0);
 	if (cr != CR_BUFFER_SMALL || property_type != expected_type)
-  {
-    report_error("CM_Get_Device_Interface_PropertyW");
-    heap_free_dz(wpath);
-    return NULL;
-  }
+  { report_error_go("CM_Get_Device_Interface_PropertyW", _cleanup); }
 
 	heap_alloc_dz(len * sizeof(BYTE), value);
 	cr = CM_Get_Device_Interface_PropertyW(wpath, key, &property_type, value, &len, 0);
-	if (cr != CR_SUCCESS)
-  {
-    report_error("CM_Get_Device_Interface_PropertyW");
-		heap_free_dz(value);
-    heap_free_dz(wpath);
-		return NULL;
-	}
+	if (cr != CR_SUCCESS) { report_error_go("CM_Get_Device_Interface_PropertyW", _failure); }
+
+_cleanup:
   heap_free_dz(wpath);
 	return value;
+
+_failure:
+  heap_free_dz(value);
+  value = NULL;
+  goto _cleanup;
 }
 
 static void*
 hid_node_get_property(DEVINST dev_node, DEVPROPKEY* key, DEVPROPTYPE expected_type)
 {
-	ULONG       len   = 0;
-	PBYTE       value = NULL;
+	u32         len;
+	u8          *value;
 	CONFIGRET   cr;
 	DEVPROPTYPE property_type;
 
-	cr = CM_Get_DevNode_PropertyW(dev_node, key, &property_type, NULL, &len, 0);
+  value = NULL;
+	cr    = CM_Get_DevNode_PropertyW(dev_node, key, &property_type, NULL, &len, 0);
 	if (cr != CR_BUFFER_SMALL || property_type != expected_type)
-  {
-    report_error("CM_Get_DevNode_PropertyW");
-    return NULL;
-  }
+  { report_error_go("CM_Get_DevNode_PropertyW", _finish); }
 
 	heap_alloc_dz(len * sizeof(BYTE), value);
 	cr = CM_Get_DevNode_PropertyW(dev_node, key, &property_type, value, &len, 0);
-	if (cr != CR_SUCCESS)
-  {
-    report_error("CM_Get_DevNode_PropertyW");
-		heap_free_dz(value);
-		return NULL;
-	}
+	if (cr != CR_SUCCESS) { report_error_go("CM_Get_DevNode_PropertyW", _failure); }
+
+_finish:
 	return value;
+_failure:
+  heap_free_dz(value);
+  value = NULL;
+  goto _finish;
 }
 
-static HidDetectBusType
+static Hid_Detect_Bus_Type
 hid_get_bus_type(char *path)
 {
-  char              *device_id = NULL;
-  char              *ids       = NULL;
-	DEVINST           dev_node;
-	CONFIGRET         cr;
-	HidDetectBusType  bus         = {0};
+  char                 *device_id, *ids;
+	DEVINST              dev_node;
+	CONFIGRET            cr;
+	Hid_Detect_Bus_Type  bus;
 
-	device_id = (char *) hid_interface_get_property(
-      path,
-      &DEVPKEY_Device_InstanceId,
-      DEVPROP_TYPE_STRING);
-
-	if (!device_id) goto end;
+  memset(&bus, 0, sizeof(Hid_Detect_Bus_Type));
+	device_id = hid_interface_get_property( path, &DEVPKEY_Device_InstanceId, DEVPROP_TYPE_STRING);
+	if (!device_id) goto _end;
 
 	cr = CM_Locate_DevNode(&dev_node, (DEVINSTID)device_id, CM_LOCATE_DEVNODE_NORMAL);
-	if (cr != CR_SUCCESS) goto end;
+	if (cr != CR_SUCCESS) goto _end;
 
 	cr = CM_Get_Parent(&dev_node, dev_node, 0);
-	if (cr != CR_SUCCESS) goto end;
+	if (cr != CR_SUCCESS) goto _end;
 
 	/* NOTE: Get the compatible ids from parent devnode */
-  ids = (char *) hid_node_get_property(dev_node,
-      &DEVPKEY_Device_CompatibleIds,
-      DEVPROP_TYPE_STRING_LIST);
-
-	if (!ids) goto end;
+  ids = hid_node_get_property(dev_node, &DEVPKEY_Device_CompatibleIds, DEVPROP_TYPE_STRING_LIST);
+	if (!ids) goto _end;
 
 	/* NOTE: Now we can parse parent's compatible IDs to find out the device bus type */
 	for (char *id = ids; *id; id += strlen(id) + 1)
@@ -252,7 +226,7 @@ hid_get_bus_type(char *path)
 		if (strstr(id, "USB")) { bus.type = HID_BUS_USB; break; }
 
 		/* https://docs.microsoft.com/windows-hardware/drivers/bluetooth/installing-a-bluetooth-device */
-		if (strstr(id, "BTHENUM")) { bus.type = HID_BUS_BL; break; }
+		if (strstr(id, "BTHENUM"))     { bus.type = HID_BUS_BL; break; }
 		if (strstr(id, "BTHLEDEVICE")) { bus.type = HID_BUS_BL; bus.flags |= HID_BUS_FLAG_BLE; break; }
 
 		/* I2C devices https://docs.microsoft.com/windows-hardware/drivers/hid/plug-and-play-support-and-power-management */
@@ -262,16 +236,16 @@ hid_get_bus_type(char *path)
 		if (strstr(id, "PNP0C51")) { bus.type = HID_BUS_SPI; break; }
 	}
 	bus.dev_node = dev_node;
-end:
-	heap_free_dz(device_id);
 	heap_free_dz(ids);
+_end:
+	heap_free_dz(device_id);
 	return bus;
 }
 
-static int
+static i32
 hid_token_value_get(char *string, char *token)
 {
-	int   token_value;
+	i32   token_value;
 	char  *startptr;
   char  *endptr;
 
@@ -285,14 +259,12 @@ hid_token_value_get(char *string, char *token)
 }
 
 static void
-hid_usb_get_info(HidDeviceInfo *dev, DEVINST dev_node)
+hid_usb_get_info(Hid_Device_Info *dev, DEVINST dev_node)
 {
-  char *dev_id = NULL;
-  char *hw_ids = NULL;
+  char *dev_id, *hw_ids;
 
-	dev_id = (char *)hid_node_get_property(dev_node, &DEVPKEY_Device_InstanceId, DEVPROP_TYPE_STRING);
-	if (!dev_id) goto end;
-
+	dev_id = hid_node_get_property(dev_node, &DEVPKEY_Device_InstanceId, DEVPROP_TYPE_STRING);
+	if (!dev_id) goto _end;
   for (char* i = dev_id; *i; ++i) *i= (char) toupper(*i);
   /*
    * NOTE:
@@ -303,11 +275,10 @@ hid_usb_get_info(HidDeviceInfo *dev, DEVINST dev_node)
 	if (hid_token_value_get(dev_id, "IG_") != -1)
   {
 		/* NOTE: Get devnode parent to reach out USB device. */
-		if (CM_Get_Parent(&dev_node, dev_node, 0) != CR_SUCCESS) goto end;
+		if (CM_Get_Parent(&dev_node, dev_node, 0) != CR_SUCCESS) goto _end;
 	}
-
-	hw_ids = (char *)hid_node_get_property(dev_node, &DEVPKEY_Device_HardwareIds, DEVPROP_TYPE_STRING_LIST);
-	if (!hw_ids) goto end;
+	hw_ids = hid_node_get_property(dev_node, &DEVPKEY_Device_HardwareIds, DEVPROP_TYPE_STRING_LIST);
+	if (!hw_ids) goto _end;
   /*
    * NOTE:
    *      Get additional information from USB device's Hardware ID
@@ -320,29 +291,26 @@ hid_usb_get_info(HidDeviceInfo *dev, DEVINST dev_node)
     if (dev->release_number == 0)
     {
       /* USB_DEVICE_DESCRIPTOR.bcdDevice value. */
-      int release_number = hid_token_value_get(hw_id, "REV_");
+      i32 release_number = hid_token_value_get(hw_id, "REV_");
       if (release_number != -1) dev->release_number = (u16) release_number;
     }
-
     if (dev->interface_number == -1)
     {
       /* NOTE: USB_INTERFACE_DESCRIPTOR.bInterfaceNumber value. */
-      int interface_number = hid_token_value_get(hw_id, "MI_");
+      i32 interface_number = hid_token_value_get(hw_id, "MI_");
       if (interface_number != -1) dev->interface_number = interface_number;
     }
   }
-
   /* NOTE: Try to get USB device manufacturer string if not provided by HidD_GetManufacturerString. */
   if (!strlen(dev->manufacturer_string))
   {
-    char *m_str = (char *) hid_node_get_property(dev_node, &DEVPKEY_Device_Manufacturer, DEVPROP_TYPE_STRING);
+    char *m_str = hid_node_get_property(dev_node, &DEVPKEY_Device_Manufacturer, DEVPROP_TYPE_STRING);
     if (m_str)
     {
       heap_free_dz(dev->manufacturer_string);
       dev->manufacturer_string = m_str;
     }
   }
-
   /* NOTE: Try to get USB device serial number if not provided by HidD_GetSerialNumberString. */
   if (!strlen(dev->serial_number))
   {
@@ -354,12 +322,12 @@ hid_usb_get_info(HidDeviceInfo *dev, DEVINST dev_node)
        *       Get devnode parent to reach out composite parent USB device.
        *       https://docs.microsoft.com/windows-hardware/drivers/usbcon/enumeration-of-the-composite-parent-device
        */
-      if (CM_Get_Parent(&usb_dev_node, dev_node, 0) != CR_SUCCESS) goto end;
+      if (CM_Get_Parent(&usb_dev_node, dev_node, 0) != CR_SUCCESS) goto _cleanup;
     }
     /* NOTE: Get the device id of the USB device. */
     heap_free_dz(dev_id);
-    dev_id = (char *)hid_node_get_property(usb_dev_node, &DEVPKEY_Device_InstanceId, DEVPROP_TYPE_STRING);
-    if (!dev_id) goto end;
+    dev_id = hid_node_get_property(usb_dev_node, &DEVPKEY_Device_InstanceId, DEVPROP_TYPE_STRING);
+    if (!dev_id) goto _cleanup;
     /*
      * NOTE:
      *       Extract substring after last '\\' of Instance ID.
@@ -374,7 +342,6 @@ hid_usb_get_info(HidDeviceInfo *dev, DEVINST dev_node)
        *      For USB devices it means that serial number is not available. Skip.
        */
       if (*ptr == '&') break;
-
       if (*ptr == '\\')
       {
         heap_free_dz(dev->serial_number);
@@ -385,22 +352,21 @@ hid_usb_get_info(HidDeviceInfo *dev, DEVINST dev_node)
   }
   /* NOTE: If we can't get the interface number, it means that there is only one interface. */
   if (dev->interface_number == -1) dev->interface_number = 0;
-end:
-  heap_free_dz(dev_id);
+_cleanup:
   heap_free_dz(hw_ids);
+_end:
+  heap_free_dz(dev_id);
 }
 
 static void
-hid_ble_get_info(HidDeviceInfo *dev, DEVINST dev_node)
+hid_ble_get_info(Hid_Device_Info *dev, DEVINST dev_node)
 {
+  char    *m_string, *serial_number, *product_string;
+  DEVINST parent_dev_node;
 	if (strlen(dev->manufacturer_string) == 0)
   {
 		/* NOTE: Manufacturer Name String (UUID: 0x2A29) */
-		char *m_string = (char *)hid_node_get_property(
-        dev_node,
-        (DEVPROPKEY*)&PKEY_DeviceInterface_Bluetooth_Manufacturer,
-        DEVPROP_TYPE_STRING);
-
+		m_string = hid_node_get_property(dev_node, &PKEY_DeviceInterface_Bluetooth_Manufacturer, DEVPROP_TYPE_STRING);
 		if (m_string)
     {
 			heap_free_dz(dev->manufacturer_string);
@@ -410,11 +376,7 @@ hid_ble_get_info(HidDeviceInfo *dev, DEVINST dev_node)
 	if (strlen(dev->serial_number) == 0)
   {
 		/* NOTE: Serial Number String (UUID: 0x2A25) */
-		char *serial_number = (char *)hid_node_get_property(
-        dev_node,
-        (DEVPROPKEY*)&PKEY_DeviceInterface_Bluetooth_DeviceAddress,
-        DEVPROP_TYPE_STRING);
-
+		serial_number = hid_node_get_property(dev_node, &PKEY_DeviceInterface_Bluetooth_DeviceAddress, DEVPROP_TYPE_STRING);
 		if (serial_number)
     {
 			heap_free_dz(dev->serial_number);
@@ -424,22 +386,15 @@ hid_ble_get_info(HidDeviceInfo *dev, DEVINST dev_node)
 	if (strlen(dev->product_string) == 0)
   {
 		/* NOTE: Model Number String (UUID: 0x2A24) */
-		char *product_string = (char *)hid_node_get_property(
-        dev_node,
-        (DEVPROPKEY*)&PKEY_DeviceInterface_Bluetooth_ModelNumber,
-        DEVPROP_TYPE_STRING);
-
+		product_string = hid_node_get_property(dev_node, &PKEY_DeviceInterface_Bluetooth_ModelNumber, DEVPROP_TYPE_STRING);
 		if (!product_string)
     {
-			DEVINST parent_dev_node = 0;
+			parent_dev_node = 0;
 			/* NOTE: Fallback: Get devnode grandparent to reach out Bluetooth LE device node */
 			if (CM_Get_Parent(&parent_dev_node, dev_node, 0) == CR_SUCCESS)
       {
 				/* NOTE: Device Name (UUID: 0x2A00) */
-				product_string = (char *) hid_node_get_property(
-            parent_dev_node,
-            &DEVPKEY_NAME,
-            DEVPROP_TYPE_STRING);
+				product_string = hid_node_get_property(parent_dev_node, &DEVPKEY_NAME, DEVPROP_TYPE_STRING);
 			}
 		}
 		if (product_string)
@@ -450,13 +405,15 @@ hid_ble_get_info(HidDeviceInfo *dev, DEVINST dev_node)
 	}
 }
 
-static void
-hid_close_info(HidDeviceInfo* info)
+static inline void
+hid_close_info(Hid_Device_Info* info)
 {
-  HidDeviceInfo *d = info;
+  Hid_Device_Info *d;
+
+  d = info;
   while (d)
   {
-    HidDeviceInfo *next = d->next;
+    Hid_Device_Info *next = d->next;
     heap_free_dz(d->serial_number);
     heap_free_dz(d->product_string);
     heap_free_dz(d->manufacturer_string);
@@ -465,11 +422,10 @@ hid_close_info(HidDeviceInfo* info)
   }
 }
 
-static void
-hid_close_device(HidDevice* dev)
+static inline void
+hid_close_device(Hid_Device* dev)
 {
-  if (!dev)
-    return ;
+  if (!dev) return ;
 
 	if (!CancelIo(dev->h_dev)) report_error("CancelIo");
 
@@ -486,80 +442,76 @@ hid_close_device(HidDevice* dev)
 	heap_free_dz(dev);
 }
 
-static HidDevice*
-hid_get_device(HidDeviceInfo *hid_info, DWORD r_timeout, DWORD w_timeout)
+#pragma warning(disable : 4701)
+#pragma warning(disable : 4703)
+static Hid_Device*
+hid_get_device(Hid_Device_Info *hid_info, u32 r_timeout, u32 w_timeout)
 {
-	HANDLE                h_dev   = INVALID_HANDLE_VALUE;
-	HIDP_CAPS             caps    = {0};
-	HidDevice             *dev    = NULL;
-	PHIDP_PREPARSED_DATA  pp_data = NULL;
+	HANDLE                h_dev;
+	HIDP_CAPS             caps;
+	Hid_Device            *dev;
+	PHIDP_PREPARSED_DATA  pp_data;
 
   /* NOTE: System devices, keyboards, mice, cannot be opened in rw */
 	h_dev = hid_open_rw(hid_info->path);
-	if (h_dev == INVALID_HANDLE_VALUE)
-  { report_error("hid_open_ro", hid_info->path); goto cleanup; }
+	if (h_dev == INVALID_HANDLE_VALUE) { report_error("hid_open_ro", hid_info->path); goto _end; }
 
-	/* Set the Input Report buffer size to 64 reports. */
-	if (!HidD_SetNumInputBuffers(h_dev, 64))
-  { console_debug("HidD_SetNumInputBuffers"); goto cleanup; }
-
-	/* Get the Input Report length for the device. */
-	if (!HidD_GetPreparsedData(h_dev, &pp_data))
-  { console_debug("HidD_GetPreparsedData"); goto cleanup; }
-
-	if (HidP_GetCaps(pp_data, &caps) != HIDP_STATUS_SUCCESS)
-  { console_debug("HidP_GetCaps"); goto cleanup; }
+	/* NOTE: Set the Input Report buffer size to 64 reports */
+	if ( !HidD_SetNumInputBuffers(h_dev, 64) ) { console_debug("HidD_SetNumInputBuffers"); goto _end; }
+	/* NOTE: Get the Input Report length for the device */
+	if ( !HidD_GetPreparsedData(h_dev, &pp_data) ) { console_debug("HidD_GetPreparsedData"); goto _end; }
+	if ( HidP_GetCaps(pp_data, &caps) != HIDP_STATUS_SUCCESS ) { console_debug("HidP_GetCaps"); goto _cleanup; }
 
   heap_alloc_dz(sizeof(HidDevice), dev);
 	dev->h_dev = h_dev;
 	h_dev      = NULL;
 
-  /* NOTE: ensuring union is zero'ed */
-  memset(&dev->ol, 0, sizeof(dev->ol));
-  memset(&dev->read_ol, 0, sizeof(dev->read_ol));
+  memset(&dev->ol,       0, sizeof(dev->ol));
+  memset(&dev->read_ol,  0, sizeof(dev->read_ol));
   memset(&dev->write_ol, 0, sizeof(dev->write_ol));
 
-  dev->blocking         = TRUE;
-  dev->read_pending     = FALSE;
+  dev->blocking         = true;
+  dev->read_pending     = false;
   /* FIXME: Handle errors for CreateEvent! */
   dev->ol.hEvent        = CreateEvent(NULL, FALSE, FALSE, NULL);
   dev->read_ol.hEvent   = CreateEvent(NULL, FALSE, FALSE, NULL);
   dev->write_ol.hEvent  = CreateEvent(NULL, FALSE, FALSE, NULL);
-  dev->write_timeout_ms = w_timeout;
   dev->read_timeout_ms  = r_timeout;
+  dev->write_timeout_ms = w_timeout;
 
-  dev->device_info  = hid_info;
   dev->input.size   = caps.InputReportByteLength;
+  dev->device_info  = hid_info;
   dev->output.size  = caps.OutputReportByteLength;
   dev->feature.size = caps.FeatureReportByteLength;
 
 	heap_alloc_dz(dev->input.size, dev->input.buf);
 	heap_alloc_dz(dev->output.size, dev->output.buf);
 	heap_alloc_dz(dev->feature.size, dev->feature.buf);
-
-cleanup:
-	if (h_dev)   handle_close(h_dev);
-	if (pp_data) HidD_FreePreparsedData(pp_data);
+_cleanup:
+	if (pp_data) { HidD_FreePreparsedData(pp_data); }
+_end:
+	if (h_dev)   { handle_close(h_dev); }
 	return dev;
 }
+#pragma warning(default : 4701)
+#pragma warning(default : 4703)
 
-static HidDeviceInfo*
+static Hid_Device_Info*
 hid_get_info(char *path, HANDLE h)
 {
-	HIDP_CAPS             caps;
+	u32                   len, size;
 	char                  string[MAX_STRING_CHARS + 1];
-	ULONG                 len     = 0;
-	ULONG                 size    = 0;
-	HidDeviceInfo         *dev    = NULL;
-	HIDD_ATTRIBUTES       attrib  = {.Size  = sizeof(HIDD_ATTRIBUTES),};
-	HidDetectBusType      dbtype  = {0};
+	HIDP_CAPS             caps;
+	Hid_Device_Info       *dev;
+	HIDD_ATTRIBUTES       attrib;
+	Hid_Detect_Bus_Type   dbtype  = {0};
 	PHIDP_PREPARSED_DATA  pp_data = NULL;
 
-  heap_alloc_dz(sizeof(HidDeviceInfo), dev);
+  attrib.Size = sizeof(HIDD_ATTRIBUTES);
+  heap_alloc_dz(sizeof(Hid_Device_Info), dev);
 	dev->next             = NULL;
 	dev->path             = path;
 	dev->interface_number = -1;
-
 	if (HidD_GetAttributes(h, &attrib))
   {
 		dev->vendor_id      = attrib.VendorID;
@@ -610,58 +562,55 @@ hid_get_info(char *path, HANDLE h)
     }
     case HID_BUS_BL:
     {
-      if (dbtype.flags & HID_BUS_FLAG_BLE)
-        hid_ble_get_info(dev, dbtype.dev_node);
+      if (dbtype.flags & HID_BUS_FLAG_BLE) hid_ble_get_info(dev, dbtype.dev_node);
       break;
     }
-    case HID_BUS_UNKNOWN:
     case HID_BUS_SPI:
     case HID_BUS_I2C:
     case HID_BUS_MAX:
+    case HID_BUS_UNKNOWN:
     default: break;
 	}
 	return dev;
 }
 
-static HidDeviceInfo*
+static Hid_Device_Info*
 hid_enumerate(u16 v_id, u16 p_id)
 {
-  char          *idev_list   = NULL;
-  GUID          iguid        = {0};
-  DWORD         len          = 0;
-  DWORD         required_len = 0;
-  CONFIGRET     cr           = 0;
-  HidDeviceInfo *root        = NULL;
-  HidDeviceInfo *current     = NULL;
+  char            *idev_list;
+  GUID            iguid;
+  u32             len;
+  HANDLE          h_dev;
+  CONFIGRET       cr;
+  Hid_Device_Info *root, *current, *tmp;
+  HIDD_ATTRIBUTES attrib;
 
+  tmp       = NULL;
+  root      = NULL;
+  current   = NULL;
+  idev_list = NULL;
   HidD_GetHidGuid(&iguid);
   do {
     cr = hid_interface_list_get_size(&len, &iguid);
-    if (cr != CR_SUCCESS) break;
+    if ( cr != CR_SUCCESS) break;
 
     if (idev_list) heap_free_dz(idev_list);
     heap_alloc_dz(len * sizeof(char) + 1, idev_list);
-
     cr = idev_get_list(&iguid, idev_list, len);
-
   } while(cr == CR_BUFFER_SMALL);
 
   if (cr != CR_SUCCESS) goto cleanup;
 
   for (char *idev = idev_list; *idev; idev += strlen(idev) + 1)
   {
-		HANDLE          h_dev   = INVALID_HANDLE_VALUE;
-		HIDD_ATTRIBUTES attrib  = {.Size = sizeof(HIDD_ATTRIBUTES)};
-
+    attrib.Size = sizeof(HIDD_ATTRIBUTES);
 		h_dev = hid_open_rw(idev);
 		if (h_dev == INVALID_HANDLE_VALUE) continue;
-
     if (HidD_GetAttributes(h_dev, &attrib))
     {
-      if ( (v_id == 0x0 || attrib.VendorID == v_id)
-          && (p_id == 0x0 || attrib.ProductID == p_id) )
+      if ( (v_id == 0x0 || attrib.VendorID == v_id) && (p_id == 0x0 || attrib.ProductID == p_id) )
       {
-        HidDeviceInfo *tmp = hid_get_info(idev, h_dev);
+        tmp = hid_get_info(idev, h_dev);
         if (tmp)
         {
           if (current) current->next = tmp;
@@ -683,16 +632,17 @@ cleanup:
 #define HID_SEND_OUTPUT   0x11
 
 static i64
-hid_send_report(HidDevice* hid_dev, HidReport data, int type)
+hid_send_report(HidDevice* hid_dev, HidReport data, i32 type)
 {
-  HidReport payload     = data;
-  HidReport dev_payload = {0};
+  Hid_Report payload, dev_payload;
 
-	if      (!data.buf || !data.size)  return -1;
+  memset(&dev_payload, 0, sizeof(Hid_Report));
+  payload = data;
+	if (!data.buf || !data.size)  return -1;
   switch(type)
   {
-    case HID_SEND_FEATURE : dev_payload = hid_dev->feature; break;
-    case HID_SEND_OUTPUT  : dev_payload = hid_dev->output;  break;
+    case HID_SEND_OUTPUT:  dev_payload = hid_dev->output;  break;
+    case HID_SEND_FEATURE: dev_payload = hid_dev->feature; break;
     default: printf("Wrong payload type specified (%d)\n", type); return -1;
   }
   /*
@@ -707,7 +657,7 @@ hid_send_report(HidDevice* hid_dev, HidReport data, int type)
 		memcpy(payload.buf, data.buf, data.size);
 		memset(payload.buf + data.size, 0, payload.size - data.size);
 	}
-	if (!HidD_SetFeature(hid_dev->h_dev, (PVOID)payload.buf, (DWORD) payload.size))
+	if (!HidD_SetFeature(hid_dev->h_dev, payload.buf, payload.size))
   {
     report_error("HidD_SetFeature");
     return -1;
@@ -716,16 +666,14 @@ hid_send_report(HidDevice* hid_dev, HidReport data, int type)
 }
 
 static i64
-hid_get_report(HANDLE h, HidReport d, int type)
+hid_get_report(HANDLE h, Hid_Report d, i32 type)
 {
+	u32         total;
+	OVERLAPPED  ol;
+
 	if (!d.buf || !d.size) return -1;
-
-  BOOL        wait  = TRUE;
-	DWORD       total = 0;
-	OVERLAPPED  ol    = {0};
-  /* NOTE: Ensure union is also zero'ed */
+  total = 0;
 	memset(&ol, 0, sizeof(ol));
-
   d.buf[0] = 0x06;
   if (!DeviceIoControl(h, type, d.buf, d.size, d.buf, d.size, &total, &ol))
   {
@@ -735,7 +683,7 @@ hid_get_report(HANDLE h, HidReport d, int type)
       return -1;
     }
   }
-	if (!GetOverlappedResult(h, &ol, &total, wait))
+	if (!GetOverlappedResult(h, &ol, &total, TRUE))
   {
     report_error("GetOverLappedResult");
 		return -1;
@@ -749,10 +697,10 @@ hid_get_report(HANDLE h, HidReport d, int type)
 #define hid_get_input_report(h, d) hid_get_report((h), (d), IOCTL_HID_GET_INPUT_REPORT)
 
 static i64
-hid_read(HidDevice* hid_dev, HidReport data)
+hid_read(Hid_Device* hid_dev, Hid_Report data)
 {
-  DWORD read  = 0;
-  if (!ReadFile(hid_dev->h_dev, data.buf, (DWORD) data.size, &read, &hid_dev->read_ol))
+  u32 read;
+  if (!ReadFile(hid_dev->h_dev, data.buf, data.size, &read, &hid_dev->read_ol))
   {
     if (GetLastError() != ERROR_IO_PENDING)
     {
@@ -761,8 +709,8 @@ hid_read(HidDevice* hid_dev, HidReport data)
     }
     switch (WaitForSingleObject(hid_dev->read_ol.hEvent, hid_dev->read_timeout_ms))
     {
+      case WAIT_TIMEOUT:  return -2;
       case WAIT_OBJECT_0: break;
-      case WAIT_TIMEOUT: return -2;
       default: report_error("WaitForSingleObject"); return -1;
     }
     if (!GetOverlappedResult(hid_dev->h_dev, &hid_dev->read_ol, &read, FALSE))
@@ -775,10 +723,12 @@ hid_read(HidDevice* hid_dev, HidReport data)
 }
 
 static i64
-hid_write(HidDevice* hid_dev, HidReport data)
+hid_write(Hid_Device* hid_dev, Hid_Report data)
 {
-  DWORD     written    = 0;
-  HidReport payload    = data;
+  u32        written;
+  Hid_Report payload;
+
+  payload = data;
 	if (!data.size || !data.buf) return -1;
   /*
    * NOTE:
@@ -792,7 +742,7 @@ hid_write(HidDevice* hid_dev, HidReport data)
     memcpy(payload.buf, data.buf, data.size);
     memset(payload.buf + data.size, 0, payload.size - data.size);
   }
-	if (!WriteFile(hid_dev->h_dev, payload.buf, (DWORD)payload.size, &written, &hid_dev->write_ol))
+	if (!WriteFile(hid_dev->h_dev, payload.buf, payload.size, &written, &hid_dev->write_ol))
   {
     if (GetLastError() != ERROR_IO_PENDING)
     {
@@ -801,8 +751,8 @@ hid_write(HidDevice* hid_dev, HidReport data)
     }
     switch (WaitForSingleObject(hid_dev->write_ol.hEvent, hid_dev->write_timeout_ms))
     {
+      case WAIT_TIMEOUT:  return -2;
       case WAIT_OBJECT_0: break;
-      case WAIT_TIMEOUT: return -2;
       default: report_error("WaitForSingleObject"); return -1;
     }
 		if (!GetOverlappedResult(hid_dev->h_dev, &hid_dev->write_ol, &written, FALSE))

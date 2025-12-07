@@ -1,0 +1,9 @@
+#include "resource.h"
+
+IDI_SDECK1 ICON "assets\\sdeck_1.ico"
+IDI_SDECK2 ICON "assets\\sdeck_2.ico"
+IDI_SDECK3 ICON "assets\\sdeck_3.ico"
+
+IDI_LEFT_PTR_CURSOR CURSOR "assets\\left_ptr.cur"
+IDI_INTERACT_CURSOR CURSOR "assets\\CursorInteract_HighContrast.cur"
+IDI_OUT_OF_RANGE_CURSOR CURSOR "assets\\CursorOutOfRange.cur"

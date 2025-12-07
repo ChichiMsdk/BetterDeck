@@ -77,7 +77,7 @@ set cc_def=%cc_def%
 set cc_def=%cc_def% %def_crt%
 
 :: -- (4090)const/volatile (4189)var init unused (5045)spectre mitigation -------------
-set cc_w=/Wall /WX /wd4090 /wd4189 /wd5045
+set cc_w=/Wall /WX /wd4090 /wd4189 /wd5045 /wd4057
 set cc_std=/experimental:c11atomics /std:clatest
 set cc_opti=/Ot /Oi
 set cc_dbg=/Zi

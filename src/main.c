@@ -1,7 +1,8 @@
+/* TODO: [_]: Project is paused until I have rudimentary GUI! cf:ryuusei */
 #if !defined(CRT_LINKED) && !defined(NO_CRT_LINKED)
   #define CRT_LINKED
 #endif
-#pragma check_stack(off)
+// #pragma check_stack(off)
 #define _CRT_SECURE_NO_WARNINGS
 #define SUB_WINDOWS
 #include <cm_entry.h>
@@ -9,8 +10,9 @@
 #include <cm_io.c>
 #include <cm_memory.c>
 #include <cm_string.c>
-#include "cm_hid.c"
 #include <cm_events.c>
+
+#include "cm_hid.c"
 
 #include "sdeck_icons.h"
 
@@ -28,10 +30,6 @@
 #endif
 #pragma warning(pop)
 
-#pragma comment(lib, "CfgMgr32.lib")
-#pragma comment(lib, "SetupAPI.lib")
-#pragma comment(lib, "hid.lib")
-
 /* NOTE: Taken from elgato's repo */
 #define VID_ELGATO              0x0fd9
 #define PID_SDECK_ORIGINAL      0x0060
@@ -48,8 +46,8 @@
 
 global u16 g_elgato_pids[] = { 
   PID_SDECK_ORIGINAL, PID_SDECK_ORIGINAL_19, PID_SDECK_MINI, 
-  PID_SDECK_NEO, PID_SDECK_XL, PID_SDECK_XL_22, PID_SDECK_MK2_21,
-  PID_SDECK_PEDAL, PID_SDECK_MINI_22, PID_SDECK_PLUS, PID_SDECK_MK2_SCISSOR,
+  PID_SDECK_NEO,      PID_SDECK_XL,          PID_SDECK_XL_22, PID_SDECK_MK2_21,
+  PID_SDECK_PEDAL,    PID_SDECK_MINI_22,     PID_SDECK_PLUS,  PID_SDECK_MK2_SCISSOR,
 };
 
 #pragma warning(disable : 4820)
@@ -69,48 +67,52 @@ typedef struct StreamDeck
   u8         *blank_key;
   u32        key_states;           // 32 packed keys
   HidDevice* hid;
-}StreamDeck;
+} StreamDeck, Stream_Deck;
 #pragma warning(default : 4820)
 
-HidDevice*
+static Hid_Device*
 sdk_get_hid_device(void)
 {
-  HidDeviceInfo *info = NULL;
-  for (u32 i = 0; i < countof(g_elgato_pids); i++)
+  u32             i, read_time_ms, write_time_ms;
+  Hid_Device      *deck;
+  Hid_Device_Info *info;
+
+  info = NULL;
+  for (i = 0; i < countof(g_elgato_pids); i++)
   {
     info = hid_enumerate(VID_ELGATO, g_elgato_pids[i]);
     if (info) break;
   }
-  if (!info) {printf("No streamdeck found.\n"); return NULL;}
+  if (!info) { printf("No streamdeck found.\n"); return NULL; }
   else printf("Found streamdeck !\n");
-
-
-  DWORD read_time_ms  = 20;
-  DWORD write_time_ms = 20;
-  HidDevice* deck = hid_get_device(info, read_time_ms, write_time_ms);
+  read_time_ms  = 20;
+  write_time_ms = 20;
+  deck = hid_get_device(info, read_time_ms, write_time_ms);
   if (!deck) hid_close_info(info);
   return deck;
 }
 
-i64
+static i64
 sdk_get_report(StreamDeck* sdk)
 {
   return hid_get_report(sdk->hid->h_dev, sdk->hid->feature, IOCTL_HID_GET_FEATURE);
 }
 
-i64
-sdk_set_brightness(StreamDeck* sdk, u8 percent)
+static i64
+sdk_set_brightness(Stream_Deck* sdk, u8 percent)
 {
-  u8        buffer[3];
-  i64       written = 0;
-  HidReport report  = { .size = 3};
+  u8         buffer[3];
+  i64        written;
+  Hid_Report report;
 
-  percent    = (percent >= 100) ? 100 : percent;
-  buffer[0]  = 0x03;
-  buffer[1]  = 0x08;
-  buffer[2]  = percent;
-  report.buf = buffer;
-  written    = hid_send_report(sdk->hid, report, HID_SEND_FEATURE);
+  memset(&report, 0, sizeof(Hid_Report));
+  report.size = 3;
+  percent     = (percent >= 100) ? 100 : percent;
+  buffer[0]   = 0x03;
+  buffer[1]   = 0x08;
+  buffer[2]   = percent;
+  report.buf  = buffer;
+  written     = hid_send_report(sdk->hid, report, HID_SEND_FEATURE);
   if (written == -1) printf("sdk_set_brightness failed\n");
   return written;
 }
@@ -118,50 +120,50 @@ sdk_set_brightness(StreamDeck* sdk, u8 percent)
 #define SDK_IMAGE_SIZE 1024
 /* NOTE: It seems we need to rotate 90 degrees the image */
 #pragma warning(disable : 4333)
-i64
-sdk_set_key_image(StreamDeck* sdk, u8 key, u8 *image, u32 image_size)
+#pragma warning(disable : 4701)
+static i64
+sdk_set_key_image(Stream_Deck* sdk, u8 key, u8 *image, u32 image_size)
 {
-  u8        buffer[SDK_IMAGE_SIZE];
-  i64       written = 0;
-  HidReport report  = { .size = SDK_IMAGE_SIZE};
+  u8         buffer[SDK_IMAGE_SIZE];
+  i64        written, left;
+  u64        to_copy, track_copy;
+  u32        header_len, loops, payload_len;
+  Hid_Report report;
 
+  memset(buffer,  0, SDK_IMAGE_SIZE);
+  memset(&report, 0, sizeof(Hid_Report));
+  report.size = SDK_IMAGE_SIZE;
   if (key >= sdk->total)
   {
     written = -2;
-    goto failure;
+    goto _failure;
   }
-
   report.buf = buffer;
   buffer[0]  = 0x02; /* NOTE: Report ID */
   buffer[1]  = 0x07; /* NOTE: Command ID */
   buffer[2]  = key;
-
-  i64 left        = image_size;
-  u32 loops       = 0;
-  u64 to_copy     = 0;
-  u64 track_copy  = 0;
-  u32 header_len  = sdk->img_rpt_header_len;
-  u32 payload_len = sdk->img_rpt_payload_len;
+  left        = image_size;
+  loops       = 0;
+  header_len  = sdk->img_rpt_header_len;
+  payload_len = sdk->img_rpt_payload_len;
   while (left > 0)
   {
     /* NOTE: Ensures we properly reset the buffer */
     memset(buffer + 3, 0, payload_len + 5);
     to_copy    = (left >= payload_len) ? payload_len : left;
     track_copy = loops * payload_len;
-
-    buffer[3] = ((i64) to_copy == left);
-    buffer[4] = (u8)(to_copy & 0xff);
-    buffer[5] = (u8)(to_copy >> header_len);
-    buffer[6] = (u8)(loops & 0xFF);
-    buffer[7] = (u8)(loops >> header_len);
-
+    buffer[3]  = ((i64) to_copy == left);
+    buffer[4]  = (u8)(to_copy & 0xff);
+    buffer[5]  = (u8)(to_copy >> header_len);
+    buffer[6]  = (u8)(loops & 0xFF);
+    buffer[7]  = (u8)(loops >> header_len);
     memcpy(buffer + 8, image + track_copy, to_copy);
     left   -= to_copy;
     written = hid_write(sdk->hid, report);
     loops++;
-    if (written == -1) goto failure;
+    if (written == -1) goto _failure;
   }
-failure:
+_failure:
   switch (written)
   {
     case -1: printf("sdk_set_key_image failed\n"); break;
@@ -171,60 +173,76 @@ failure:
   return written;
 }
 #pragma warning(default : 4333)
+#pragma warning(default : 4701)
 
 /*
  * TODO:
+ *       [_]: Images are smaller whenever key is pressed
  *       [_]: This should be done on a separate thread
  *       [_]: Resize images to fit streamdeck's expected output
+ *       [_]: Rotate the images
  *       [_]: GIF's
  */
-i64
-sdk_set_key_image_path(StreamDeck* sdk, u8 key, char* path)
+static i64
+sdk_set_key_image_path(Stream_Deck* sdk, u8 key, char* path)
 {
-  cmFile file = {0};
-  if (file_exist_open_map_ro(path, &file) != CM_OK)
+  u8    *image;
+  i64   written;
+  u32   size;
+  File  file;
+
+  if ( file_exist_open_map_ro(path, &file) != CM_OK )
   {
-    report_error_box("file_exist_open_map_ro");
-    return -1;
+    written = -1;
+    report_error_box("file_exist_open_map_ro"); goto _end;
   }
-  u8* image      = file.buffer.view;
-  u32 image_size = (u32) file.buffer.size;
-  i64 written    = sdk_set_key_image(sdk, key, image, image_size);
+  image   = file.buffer.view;
+  size    = (u32) file.buffer.size;
+  written = sdk_set_key_image(sdk, key, image, size);
   file_close(&file);
+_end:
   return written;
 }
 
-i64
-sdk_reset_key_stream(StreamDeck* sdk)
+static i64
+sdk_reset_key_stream(Stream_Deck* sdk)
 {
-  u8        buffer[SDK_IMAGE_SIZE];
-  i64       written = 0;
-  HidReport report  = { .size = SDK_IMAGE_SIZE};
+  u8          buffer[SDK_IMAGE_SIZE];
+  i64         written;
+  Hid_Report  report;
 
+  memset(&report, 0, sizeof(Hid_Report));
   memset(buffer, 0, SDK_IMAGE_SIZE);
+  report.size   = SDK_IMAGE_SIZE;
   report.buf    = buffer;
   report.buf[0] = 0x02;
   written = hid_write(sdk->hid, report);
   return written;
 }
 
-i64
-sdk_reset(StreamDeck* sdk)
+static i64
+sdk_reset(Stream_Deck *sdk)
 {
-  u8        buffer[2000];
-  HidReport report  = { .size = 2};
+  u8          buffer[2000];
+  Hid_Report  report;
 
+  memset(buffer, 0, 2000);
+  memset(&report, 0, sizeof(Hid_Report));
   buffer[0]   = 0x03;
   buffer[1]   = 0x02;
   report.buf  = buffer;
-  i64 written = hid_send_report(sdk->hid, report, HID_SEND_FEATURE);
-  return written;
+  report.size = 2;
+  return hid_send_report(sdk->hid, report, HID_SEND_FEATURE);
 }
-void
-print_pressed(StreamDeck *sdk)
+
+static void
+print_pressed(Stream_Deck *sdk)
 {
-  u32 key_states = sdk->key_states;
-  for (int i = 0; i < 32; i++)
+  i32 i;
+  u32 key_states;
+
+  key_states = sdk->key_states;
+  for (i = 0; i < 32; i++)
   {
     if ((key_states >> i) & 1)
     {
@@ -244,8 +262,8 @@ print_pressed(StreamDeck *sdk)
 
 u8 *g_read_buffer = NULL;
 
-i64
-sdk_read_input(StreamDeck* sdk)
+static i64
+sdk_read_input(Stream_Deck* sdk)
 {
   /* u8        buffer[SDK_KEY_INPUT_SIZE]; */
   /*
@@ -260,18 +278,22 @@ sdk_read_input(StreamDeck* sdk)
    *       Check with sdk_set_key_image whenever it's not called from main thread
    *       if stack allocation also ends up crashing
    */
-  i64       read = 0;
-  HidReport data = {.buf = g_read_buffer, .size = SDK_KEY_INPUT_SIZE,};
-  memset(data.buf, 0, SDK_KEY_INPUT_SIZE);
+  u32       new_keystates, max, i, j;
+  i64       read;
+  Hid_Report data;
 
-  u32 new_keystates = 0;
-  read = hid_read(sdk->hid, data);
+  memset(&data, 0, sizeof(Hid_Report));
+  memset(data.buf, 0, SDK_KEY_INPUT_SIZE);
+  data.buf      = g_read_buffer;
+  data.size     = SDK_KEY_INPUT_SIZE;
+  new_keystates = 0;
+  read          = hid_read(sdk->hid, data);
   if (read == -1) console_debug("sdk_read_input failed")
   else if (read != -2)
   {
     /* NOTE: Skip the header and get the key states. */
-    u32 max = 4 + sdk->total;
-    for (u32 i = 4, j = 0; i < max ; i++, j++)
+    max = 4 + sdk->total;
+    for (i = 4, j = 0; i < max ; i++, j++)
     {
       if (data.buf[i]) new_keystates |= (1 << j);
       else 
@@ -297,42 +319,17 @@ sdk_read_input(StreamDeck* sdk)
   IF(r != CM_OK) report_error_box(# exp); EXIT_FAIL(); ENDIF\
   WHILE
 
+#define CM_G(exp, label)\
+  DO r = (exp);\
+  IF(r != CM_OK) report_error_box_go(# exp, (label)); ENDIF\
+  WHILE
+
 LRESULT CALLBACK
 win_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
-  LRESULT result = 0;
   switch (msg)
   {
-    case WM_CLOSE:
-      {
-        PostQuitMessage(0);
-        return 0;
-      }
-    /*
-     * case WM_SIZE:
-     *   {
-     *     switch (wparam)
-     *     {
-     *       case SIZE_MAXIMIZED:
-     *         {
-     *         }
-     *     }
-     *   } FT;
-     * case WM_ENTERSIZEMOVE:
-     * case WM_EXITSIZEMOVE:
-     * case WM_LBUTTONDOWN:
-     * case WM_MBUTTONDOWN:
-     * case WM_RBUTTONDOWN:
-     * case WM_LBUTTONUP:
-     * case WM_MBUTTONUP:
-     * case WM_RBUTTONUP:
-     * case WM_MOUSEMOVE:
-     * case WM_SYSKEYUP:
-     * case WM_KEYUP:
-     * case WM_SYSKEYDOWN:
-     * case WM_KEYDOWN:
-     */
-      // Catch this message so to prevent the window from becoming too small.
+    case WM_CLOSE: PostQuitMessage(0); return 0;
     case WM_GETMINMAXINFO:
       {
         ((MINMAXINFO*)lparam)->ptMinTrackSize.x = 200;
@@ -349,24 +346,28 @@ typedef struct ThreadArgs
   void    *args;
   /* NOTE: Event for the thread to exit */
   HANDLE  wait_event;
-}ThreadArgs;
+} ThreadArgs, Thread_Args;
 
 typedef struct cmThread
 {
   HANDLE      handle;
-  DWORD       id;
+  u32         id;
   u32         padding;
-  ThreadArgs  args;
-}cmThread;
+  Thread_Args args;
+} cmThread, Thread;
 
-DWORD WINAPI
-thread_proc(void* args)
+static u32
+thread_proc(void *args)
 {
-  DWORD       value      = 0;
-  ThreadArgs  *th_args   = (ThreadArgs*) args;
-  HANDLE      wait_event = th_args->wait_event;
-  StreamDeck  *sdk       = (StreamDeck*) th_args->args;
-  i64         written    = -1;
+  i64         written;
+  u32         value;
+  HANDLE      wait_event;
+  Thread_Args *th_args;
+  Stream_Deck *sdk;
+
+  th_args    = args;
+  sdk        = th_args->args;
+  wait_event = th_args->wait_event;
   while (1)
   {
     written = sdk_read_input(sdk);
@@ -382,10 +383,11 @@ thread_proc(void* args)
   ExitThread(EXIT_SUCCESS);
 }
 
-static void
-sdk_reading_thread_close(cmThread th)
+static inline void
+sdk_reading_thread_close(Thread th)
 {
-  CM_CODE code = CM_OK;
+  CM_CODE code;
+
   code = handle_close(th.handle);
   if (code != CM_OK) report_error_box("handle_close");
   code = handle_close(th.args.wait_event);
@@ -393,29 +395,35 @@ sdk_reading_thread_close(cmThread th)
 }
 
 static bool
-sdk_reading_thread_open(cmThread *th, StreamDeck *sdk)
+sdk_reading_thread_open(Thread *th, Stream_Deck *sdk)
 {
+  bool value;
+
+  value = true;
   th->args.args       = sdk;
   th->args.wait_event = CreateEvent(NULL, FALSE, FALSE, "cm_wait_event");
-  if (!th->args.wait_event) {report_error_box("CreateEvent"); return false; };
+  if (!th->args.wait_event) { report_error_box("CreateEvent"); return false; };
 
   th->handle = CreateThread(NULL, 1'000'000, thread_proc, &th->args, CREATE_SUSPENDED, &th->id);
-  if (!th->handle) { report_error_box("CreateThread"); return false; }
-  return true;
+  if (!th->handle) { report_error_box("CreateThread"); value = false; }
+  return value;
 }
 
 ENTRY
 {
   CM_R(r);
 #if defined(SUB_WINDOWS)
-  if (!AllocConsole()) report_error_box("AllocConsole");
+  if ( !AllocConsole() ) report_error_box("AllocConsole");
 #endif // (SUB_WINDOWS)
-#if defined(CRT_LINKED) && defined (SUB_WINDOWS)
-  freopen("CON","w",stdout);
-#endif
-  i64 read       = -1;
-  i64 written    = -1;
-  StreamDeck sdk = {
+
+  u32     ret;
+  i64     read, written;
+  bool    quit;
+  Thread  th;
+
+  read    = -1;
+  written = -1;
+  Stream_Deck sdk = {
     .rows  = 4, .cols = 8, .total = 8 * 4, .pxl_w = 96, .pxl_h = 96,
     .img_rpt_header_len = 8, .img_rpt_len = 1024, .img_rpt_payload_len = 1024 - 8,
     .img_format = "JPEG", .key_rotation = 0, .blank_key = blank_key_img,
@@ -423,35 +431,29 @@ ENTRY
   sdk.hid = sdk_get_hid_device();
   if (!sdk.hid) goto exiting;
 
-  cmWindow win ={.x = 2000, .y = 500, .w = 300, .h = 500};
+  Window win ={.x = 2000, .y = 500, .w = 300, .h = 500};
   window_create(&win, win_proc, false);
 
   heap_alloc_dz(SDK_KEY_INPUT_SIZE * sizeof(u8), g_read_buffer);
 
-  cmThread th = {0};
+  memset(&th, 0, sizeof(Thread));
   sdk_reading_thread_open(&th, &sdk);
 
-  bool quit = false;
   quit = event_dispatch(NULL, NULL, NULL);
-  if (!ResumeThread(th.handle)) {report_error_box("ResumeThread"); goto exit_thread;}
+  if ( !ResumeThread(th.handle) ) { report_error_box("ResumeThread"); goto exit_thread; }
   while (!quit)
   {
-    /*
-     * sdk_reset(&sdk);
-     * sdk_reset_key_stream(&sdk);
-     * sdk_set_brightness(&sdk, 100);
-     * sdk_set_key_image(&sdk, 0x00, blank_key_img, countof(blank_key_img));
-     */
+    sdk_set_key_image_path(&sdk, 0x03, "C:\\Users\\chiha\\Pictures\\final-image.jpg");
     quit = event_dispatch(NULL, NULL, NULL);
   }
   if (!SetEvent(th.args.wait_event)) {report_error_box("SetEvent"); goto exit_thread;}
 
   /* NOTE: We wait max 30 ms for the thread to finish */
-  DWORD ret = WaitForSingleObject(th.handle, 30);
+  ret = WaitForSingleObject(th.handle, 30);
   switch(ret)
   {
+    case WAIT_TIMEOUT:  console_debug("Timeout for thread to finish expired\n"); break;
     case WAIT_OBJECT_0: break;
-    case WAIT_TIMEOUT: console_debug("Timeout for thread to finish expired\n"); break;
     default: report_error_box("WaitForSingleObject"); break;
   }
 

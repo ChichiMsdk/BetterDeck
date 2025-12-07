@@ -25,7 +25,7 @@ if "%clang%"=="1"   set msvc=0 && echo [clang compile]
 rem if not %crt%=1
 
 :: -- CRT_NO_CRT ----------------------------------------------------------------------
-
+set crt=0
 if not "%crt%"=="1" (
   echo [NO_CRT LINKED]
   set def_crt=/DNO_CRT_LINKED

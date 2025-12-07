@@ -1,9 +1,5 @@
 /* TODO: [_]: Project is paused until I have rudimentary GUI! cf:ryuusei */
-#if !defined(CRT_LINKED) && !defined(NO_CRT_LINKED)
-  #define CRT_LINKED
-#endif
-// #pragma check_stack(off)
-#define _CRT_SECURE_NO_WARNINGS
+
 #define SUB_WINDOWS
 #include <cm_entry.h>
 #include <cm_error_handling.c>
@@ -13,22 +9,11 @@
 #include <cm_events.c>
 
 #include "cm_hid.c"
-
 #include "sdeck_icons.h"
 
-#if OS_WINDOWS
-  #include <cm_win32.c>
-#endif //OS_WINDOWS
-
-#pragma warning(push, 0)
-#include <windows.h>
 #include <cfgmgr32.h>
 #include <hidsdi.h>
 #include <setupapi.h>
-#if defined(CRT_LINKED)
-  #include <stdio.h>
-#endif
-#pragma warning(pop)
 
 /* NOTE: Taken from elgato's repo */
 #define VID_ELGATO              0x0fd9
